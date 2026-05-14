@@ -5,7 +5,27 @@ import Document, { DocumentContext, Html, Head, Main, NextScript } from 'next/do
 import { ServerStyleSheet } from 'styled-components';
 import {context, propagation} from "@opentelemetry/api";
 
-const { ENV_PLATFORM, WEB_OTEL_SERVICE_NAME, PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_COLLECTOR_HOST} = process.env;
+const {
+  ENV_PLATFORM,
+  WEB_OTEL_SERVICE_NAME,
+  PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+  OTEL_COLLECTOR_HOST,
+  FARO_URL,
+  FARO_APP_NAME,
+  FARO_APP_NAMESPACE,
+  FARO_APP_VERSION,
+  FARO_APP_ENVIRONMENT,
+  FARO_SESSION_TRACKING_ENABLED,
+  FARO_SESSION_PERSISTENT,
+  FARO_SESSION_SAMPLE_RATE,
+  FARO_BUNDLE_ID,
+} = process.env;
+
+// JSON-encode every value before interpolating into the inline <script> so
+// stray quotes / backslashes can never break out of the literal and the same
+// path works for missing env vars (becomes `undefined` instead of `'undefined'`).
+const enc = (value: string | undefined): string =>
+  value === undefined ? 'undefined' : JSON.stringify(value);
 
 export default class MyDocument extends Document<{ envString: string }> {
   static async getInitialProps(ctx: DocumentContext) {
@@ -28,9 +48,18 @@ export default class MyDocument extends Document<{ envString: string }> {
 
       const envString = `
         window.ENV = {
-          NEXT_PUBLIC_PLATFORM: '${ENV_PLATFORM}',
-          NEXT_PUBLIC_OTEL_SERVICE_NAME: '${WEB_OTEL_SERVICE_NAME}',
-          NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: '${otlpTracesEndpoint}',
+          NEXT_PUBLIC_PLATFORM: ${enc(ENV_PLATFORM)},
+          NEXT_PUBLIC_OTEL_SERVICE_NAME: ${enc(WEB_OTEL_SERVICE_NAME)},
+          NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${enc(otlpTracesEndpoint)},
+          NEXT_PUBLIC_FARO_URL: ${enc(FARO_URL)},
+          NEXT_PUBLIC_FARO_APP_NAME: ${enc(FARO_APP_NAME || WEB_OTEL_SERVICE_NAME)},
+          NEXT_PUBLIC_FARO_APP_NAMESPACE: ${enc(FARO_APP_NAMESPACE)},
+          NEXT_PUBLIC_FARO_APP_VERSION: ${enc(FARO_APP_VERSION)},
+          NEXT_PUBLIC_FARO_APP_ENVIRONMENT: ${enc(FARO_APP_ENVIRONMENT)},
+          NEXT_PUBLIC_FARO_SESSION_TRACKING_ENABLED: ${enc(FARO_SESSION_TRACKING_ENABLED)},
+          NEXT_PUBLIC_FARO_SESSION_PERSISTENT: ${enc(FARO_SESSION_PERSISTENT)},
+          NEXT_PUBLIC_FARO_SESSION_SAMPLE_RATE: ${enc(FARO_SESSION_SAMPLE_RATE)},
+          NEXT_PUBLIC_FARO_BUNDLE_ID: ${enc(FARO_BUNDLE_ID)},
           IS_SYNTHETIC_REQUEST: '${isSyntheticRequest}',
         };`;
       return {

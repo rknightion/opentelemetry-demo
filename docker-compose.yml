@@ -299,6 +299,18 @@ services:
       - OTEL_COLLECTOR_HOST
       - FLAGD_HOST
       - FLAGD_PORT
+      # Grafana Faro Frontend Observability (all optional - if FARO_URL is empty
+      # the frontend skips Faro initialization and only the existing OTel
+      # collector tracing remains active).
+      - FARO_URL
+      - FARO_APP_NAME
+      - FARO_APP_NAMESPACE
+      - FARO_APP_VERSION
+      - FARO_APP_ENVIRONMENT
+      - FARO_SESSION_TRACKING_ENABLED
+      - FARO_SESSION_PERSISTENT
+      - FARO_SESSION_SAMPLE_RATE
+      - FARO_BUNDLE_ID
     depends_on:
       ad:
         condition: service_started

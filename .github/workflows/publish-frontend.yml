@@ -1,0 +1,174 @@
+# Publishes the OpenTelemetry demo `frontend` container with Grafana Faro
+# instrumentation baked in to ghcr.io/rknightion/opentelemetry-demo.
+#
+# This workflow lives alongside (rather than replacing) the upstream
+# `build-images.yml` so rebases from upstream stay clean. The upstream
+# workflow short-circuits on forks via `!github.event.repository.fork`;
+# this one runs on the fork unconditionally.
+name: Publish frontend image (rknightion fork)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/frontend/**'
+      - '.github/workflows/publish-frontend.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Extra tag to publish (in addition to the commit sha)
+        required: false
+        default: ''
+      upload_sourcemaps:
+        description: Upload sourcemaps to Grafana Cloud Frontend Observability after the image is pushed
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_REPO: ghcr.io/rknightion/opentelemetry-demo
+  TAG_SUFFIX: frontend
+
+jobs:
+  build_and_push:
+    runs-on: ubuntu-latest
+    outputs:
+      bundle_id: ${{ steps.bundle.outputs.bundle_id }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Compute bundle id
+        id: bundle
+        # The bundle id ties source maps to the running JS. Using `<short-sha>`
+        # makes it easy to correlate to a commit; the manual run override lets
+        # us tag throwaway test builds.
+        run: |
+          BUNDLE_ID="${GITHUB_SHA::12}"
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            BUNDLE_ID="${{ github.event.inputs.tag }}-$BUNDLE_ID"
+          fi
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
+          echo "Bundle id: $BUNDLE_ID"
+
+      - name: Load IMAGE_VERSION from .env
+        run: |
+          if [ -f .env ]; then
+            grep -E '^IMAGE_VERSION=' .env >> "$GITHUB_ENV" || true
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+        with:
+          image: tonistiigi/binfmt:master
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Build and push frontend image
+        id: build
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: ./
+          file: ./src/frontend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # Source maps are uploaded in the follow-up job rather than inside
+          # the Dockerfile so we don't ship the API key into image layers.
+          # The build-args below seed the bundle id and app version inside the
+          # container so the runtime Faro SDK reports them with every signal.
+          build-args: |
+            FARO_BUNDLE_ID=${{ steps.bundle.outputs.bundle_id }}
+            FARO_APP_VERSION=${{ env.IMAGE_VERSION || steps.bundle.outputs.bundle_id }}
+            FARO_SOURCE_MAP_APP_NAME=${{ vars.FARO_APP_NAME }}
+            FARO_SOURCE_MAP_SKIP_UPLOAD=true
+            FARO_SOURCE_MAP_KEEP_AFTER_UPLOAD=true
+          tags: |
+            ${{ env.IMAGE_REPO }}:latest-${{ env.TAG_SUFFIX }}
+            ${{ env.IMAGE_REPO }}:${{ steps.bundle.outputs.bundle_id }}-${{ env.TAG_SUFFIX }}
+            ${{ env.IMAGE_REPO }}:${{ github.sha }}-${{ env.TAG_SUFFIX }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            io.grafana.faro.bundle-id=${{ steps.bundle.outputs.bundle_id }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  upload_sourcemaps:
+    needs: build_and_push
+    runs-on: ubuntu-latest
+    # Run when either: manual dispatch asks for upload, OR a regular push
+    # happens AND the required Faro source-map secrets are present (we gate on
+    # FARO_SOURCE_MAP_API_KEY because it's the only non-public value).
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.upload_sourcemaps == 'true'
+      || github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Detect Faro secrets
+        id: detect
+        run: |
+          if [ -n "${{ secrets.FARO_SOURCE_MAP_API_KEY }}" ]; then
+            echo "have_secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_secrets=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::FARO_SOURCE_MAP_API_KEY secret missing; skipping source map upload."
+          fi
+
+      - name: Set up Node
+        if: steps.detect.outputs.have_secrets == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+
+      - name: Install frontend deps
+        if: steps.detect.outputs.have_secrets == 'true'
+        working-directory: ./src/frontend
+        run: npm ci
+
+      - name: Build with webpack to emit source maps locally
+        if: steps.detect.outputs.have_secrets == 'true'
+        working-directory: ./src/frontend
+        env:
+          FARO_BUNDLE_ID: ${{ needs.build_and_push.outputs.bundle_id }}
+          FARO_APP_VERSION: ${{ needs.build_and_push.outputs.bundle_id }}
+          # The webpack plugin needs the same configuration to inject the
+          # bundle id into the JS bundles. Source maps are uploaded by the
+          # next step explicitly so we set skipUpload=true here.
+          FARO_SOURCE_MAP_ENDPOINT: ${{ secrets.FARO_SOURCE_MAP_ENDPOINT }}
+          FARO_SOURCE_MAP_APP_NAME: ${{ vars.FARO_APP_NAME }}
+          FARO_SOURCE_MAP_APP_ID: ${{ secrets.FARO_SOURCE_MAP_APP_ID }}
+          FARO_SOURCE_MAP_API_KEY: ${{ secrets.FARO_SOURCE_MAP_API_KEY }}
+          FARO_SOURCE_MAP_STACK_ID: ${{ secrets.FARO_SOURCE_MAP_STACK_ID }}
+          FARO_SOURCE_MAP_KEEP_AFTER_UPLOAD: 'true'
+          FARO_SOURCE_MAP_SKIP_UPLOAD: 'true'
+        run: npx next build --webpack
+
+      - name: Upload source maps to Grafana Cloud
+        if: steps.detect.outputs.have_secrets == 'true'
+        working-directory: ./src/frontend
+        run: |
+          npx faro-cli upload \
+            --endpoint "${{ secrets.FARO_SOURCE_MAP_ENDPOINT }}" \
+            --app-id "${{ secrets.FARO_SOURCE_MAP_APP_ID }}" \
+            --api-key "${{ secrets.FARO_SOURCE_MAP_API_KEY }}" \
+            --stack-id "${{ secrets.FARO_SOURCE_MAP_STACK_ID }}" \
+            --app-name "${{ vars.FARO_APP_NAME }}" \
+            --bundle-id "${{ needs.build_and_push.outputs.bundle_id }}" \
+            --output-path .next/static \
+            --recursive \
+            --gzip-contents \
+            --verbose
