@@ -95,7 +95,12 @@ jobs:
             FARO_SOURCE_MAP_APP_NAME=${{ vars.FARO_APP_NAME }}
             FARO_SOURCE_MAP_SKIP_UPLOAD=true
             FARO_SOURCE_MAP_KEEP_AFTER_UPLOAD=true
+          # The IMAGE_VERSION tag (e.g. 2.2.0-frontend) is what values.yaml
+          # pins to so updatecli/oteldemo-images.yaml can bump it in lockstep
+          # with publish-components.yml. The other tags are the
+          # original sha/bundle-id pair for traceability.
           tags: |
+            ${{ env.IMAGE_REPO }}:${{ env.IMAGE_VERSION }}-${{ env.TAG_SUFFIX }}
             ${{ env.IMAGE_REPO }}:latest-${{ env.TAG_SUFFIX }}
             ${{ env.IMAGE_REPO }}:${{ steps.bundle.outputs.bundle_id }}-${{ env.TAG_SUFFIX }}
             ${{ env.IMAGE_REPO }}:${{ github.sha }}-${{ env.TAG_SUFFIX }}

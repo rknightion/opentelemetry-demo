@@ -42,6 +42,17 @@ dependencies {
     } else {
         implementation platform("io.opentelemetry:opentelemetry-bom:${opentelemetryVersion}")
         implementation platform("io.opentelemetry.instrumentation:opentelemetry-instrumentation-bom:${opentelemetryInstrumentationVersion}")
+        // flagd-provider (below) pulls grpc-netty-shaded transitively at its
+        // own pinned io.grpc.version (1.79.0 at flagd 0.13.1). The shaded
+        // jar bakes in older grpc-core internals, which mismatches the
+        // grpc-core 1.81.0 we declare explicitly — at runtime grpc-core
+        // calls ServerImplBuilder.build() → buildClientTransportServers(
+        // List, MetricRecorder), a signature that doesn't exist on the
+        // shaded transport server builder, and the process exits with
+        // java.lang.AbstractMethodError before AdService.start completes.
+        // The grpc-bom platform aligns every gRPC artifact (transitive
+        // grpc-netty-shaded included) to grpcVersion.
+        implementation platform("io.grpc:grpc-bom:${grpcVersion}")
 
         implementation "com.google.api.grpc:proto-google-common-protos:2.70.0",
                 "com.google.protobuf:protobuf-java:${protocVersion}",
