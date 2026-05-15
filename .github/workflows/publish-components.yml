@@ -1,0 +1,166 @@
+# Publishes otel-demo component images (everything except `frontend`, which
+# has bespoke Faro source-map handling and lives in `publish-frontend.yml`)
+# to ghcr.io/rknightion/opentelemetry-demo.
+#
+# This sits alongside the upstream `build-images.yml` rather than replacing
+# it: upstream short-circuits with `!github.event.repository.fork`, this one
+# runs on the fork unconditionally. Keeping them separate makes rebases from
+# upstream conflict-free.
+#
+# Tags per component:
+#   - <IMAGE_VERSION>-<component>   e.g. 2.2.0-accounting   (pinnable, what values.yaml uses)
+#   - <short-sha>-<component>                              (audit/rollback)
+#   - latest-<component>                                   (floating)
+name: Publish component images (rknightion fork)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - '!src/frontend/**'
+      - '.env'
+      - '.github/workflows/publish-components.yml'
+  workflow_dispatch:
+    inputs:
+      components:
+        description: 'Comma-separated component list (empty = all)'
+        required: false
+        default: ''
+      force:
+        description: 'Force rebuild even if no source changes'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_REPO: ghcr.io/rknightion/opentelemetry-demo
+
+jobs:
+  build_and_push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - { name: accounting,       file: ./src/accounting/Dockerfile,       context: ./, qemu: true }
+          - { name: ad,               file: ./src/ad/Dockerfile,               context: ./, qemu: true }
+          - { name: cart,             file: ./src/cart/src/Dockerfile,         context: ./, qemu: false }
+          - { name: checkout,         file: ./src/checkout/Dockerfile,         context: ./, qemu: true }
+          - { name: currency,         file: ./src/currency/Dockerfile,         context: ./, qemu: true }
+          - { name: email,            file: ./src/email/Dockerfile,            context: ./, qemu: true }
+          - { name: flagd-ui,         file: ./src/flagd-ui/Dockerfile,         context: ./, qemu: true }
+          - { name: fraud-detection,  file: ./src/fraud-detection/Dockerfile,  context: ./, qemu: true }
+          - { name: frontend-proxy,   file: ./src/frontend-proxy/Dockerfile,   context: ./, qemu: true }
+          - { name: image-provider,   file: ./src/image-provider/Dockerfile,   context: ./, qemu: true }
+          - { name: kafka,            file: ./src/kafka/Dockerfile,            context: ./, qemu: true }
+          - { name: llm,              file: ./src/llm/Dockerfile,              context: ./, qemu: true }
+          - { name: load-generator,   file: ./src/load-generator/Dockerfile,   context: ./, qemu: true }
+          - { name: payment,          file: ./src/payment/Dockerfile,          context: ./, qemu: true }
+          - { name: product-catalog,  file: ./src/product-catalog/Dockerfile,  context: ./, qemu: true }
+          - { name: product-reviews,  file: ./src/product-reviews/Dockerfile,  context: ./, qemu: true }
+          - { name: quote,            file: ./src/quote/Dockerfile,            context: ./, qemu: true }
+          - { name: recommendation,   file: ./src/recommendation/Dockerfile,   context: ./, qemu: true }
+          - { name: shipping,         file: ./src/shipping/Dockerfile,         context: ./, qemu: true }
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Load .env into GITHUB_ENV
+        run: |
+          if [ -f .env ]; then
+            grep -vE '^\s*#|^\s*$' .env >> "$GITHUB_ENV"
+          fi
+
+      - name: Decide whether to build
+        id: decide
+        run: |
+          FORCE="${{ github.event.inputs.force }}"
+          REQUESTED="${{ github.event.inputs.components }}"
+          NAME="${{ matrix.component.name }}"
+          if [ "$FORCE" = "true" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Reason: manual force"; exit 0
+          fi
+          if [ -n "$REQUESTED" ]; then
+            if echo ",$REQUESTED," | grep -q ",$NAME,"; then
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              echo "Reason: in requested list"
+            else
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              echo "Reason: not in requested list"
+            fi
+            exit 0
+          fi
+          # Auto: build if anything under the component's dir, .env, or this
+          # workflow itself changed. Workflow changes trigger a full rebuild
+          # so the matrix self-bootstraps when paths/tags are reshuffled.
+          DOCKERFILE_DIR=$(dirname "${{ matrix.component.file }}")
+          WORKFLOW_FILE=".github/workflows/publish-components.yml"
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            BEFORE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- "$DOCKERFILE_DIR" .env "$WORKFLOW_FILE")
+          if [ -n "$CHANGED" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Reason: changes in $DOCKERFILE_DIR, .env, or $WORKFLOW_FILE"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Reason: no changes"
+          fi
+
+      - name: Log in to GHCR
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        if: steps.decide.outputs.build == 'true' && matrix.component.qemu
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+        with:
+          image: tonistiigi/binfmt:master
+
+      - name: Set up Docker Buildx
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+            max-parallelism = 2
+
+      - name: Compute short sha
+        if: steps.decide.outputs.build == 'true'
+        id: sha
+        run: echo "short=$(echo ${{ github.sha }} | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: ${{ matrix.component.context }}
+          file: ${{ matrix.component.file }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            OTEL_JAVA_AGENT_VERSION=${{ env.OTEL_JAVA_AGENT_VERSION }}
+            OPENTELEMETRY_CPP_VERSION=${{ env.OPENTELEMETRY_CPP_VERSION }}
+            TRACETEST_IMAGE_VERSION=${{ env.TRACETEST_IMAGE_VERSION }}
+            OPENSEARCH_IMAGE=${{ env.OPENSEARCH_IMAGE }}
+          tags: |
+            ${{ env.IMAGE_REPO }}:${{ env.IMAGE_VERSION }}-${{ matrix.component.name }}
+            ${{ env.IMAGE_REPO }}:${{ steps.sha.outputs.short }}-${{ matrix.component.name }}
+            ${{ env.IMAGE_REPO }}:latest-${{ matrix.component.name }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.IMAGE_VERSION }}
+          cache-from: type=gha,scope=${{ matrix.component.name }}
+          cache-to: type=gha,scope=${{ matrix.component.name }},mode=max
