@@ -23,7 +23,14 @@ const Footer = () => {
       <div>
         <p>This website is hosted for demo purpose only. It is not an actual shop.</p>
         <p>
-          <span data-cy={CypressFields.SessionId}>session-id: {sessionId}</span>
+          {/* sessionId is populated from localStorage in a client-only effect, so
+              it is empty during SSR and differs on the client. Suppressing the
+              hydration warning keeps React from discarding the server-rendered
+              tree (React error #418), which previously widened the window during
+              which the homepage product grid rendered empty. */}
+          <span data-cy={CypressFields.SessionId} suppressHydrationWarning>
+            session-id: {sessionId}
+          </span>
         </p>
       </div>
       <p>

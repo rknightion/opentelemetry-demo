@@ -7,10 +7,10 @@
 import FrontendTracer from '../utils/telemetry/FrontendTracer';
 
 import '../styles/globals.css';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { dehydrate, DehydratedState, HydrationBoundary, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App, { AppContext, AppProps } from 'next/app';
 import Router from 'next/router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { FaroErrorBoundary, faro } from '@grafana/faro-react';
 import CurrencyProvider from '../providers/Currency.provider';
 import CartProvider from '../providers/Cart.provider';
@@ -84,9 +84,27 @@ if (typeof window !== 'undefined') {
   }
 }
 
-const queryClient = new QueryClient();
+type AppPropsWithDehydratedState = AppProps & {
+  pageProps: { dehydratedState?: DehydratedState };
+};
 
-function MyApp({ Component, pageProps }: AppProps) {
+function MyApp({ Component, pageProps }: AppPropsWithDehydratedState) {
+  // Create the QueryClient once per app instance (never at module scope, which
+  // would share a cache across requests and leak data between users on the
+  // server). A non-zero staleTime stops the client from immediately refetching
+  // data that was just server-rendered, so the SSR'd grid stays put instead of
+  // flashing while a redundant request resolves.
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            staleTime: 60 * 1000,
+          },
+        },
+      })
+  );
+
   useEffect(() => {
     // Pages Router has no native route-change hook for instrumentation, so we
     // bridge Next's router events into Faro's view tracking. Every navigation
@@ -109,11 +127,13 @@ function MyApp({ Component, pageProps }: AppProps) {
       <ThemeProvider theme={Theme}>
         <OpenFeatureProvider>
           <QueryClientProvider client={queryClient}>
-            <CurrencyProvider>
-              <CartProvider>
-                <Component {...pageProps} />
-              </CartProvider>
-            </CurrencyProvider>
+            <HydrationBoundary state={pageProps.dehydratedState}>
+              <CurrencyProvider>
+                <CartProvider>
+                  <Component {...pageProps} />
+                </CartProvider>
+              </CurrencyProvider>
+            </HydrationBoundary>
           </QueryClientProvider>
         </OpenFeatureProvider>
       </ThemeProvider>

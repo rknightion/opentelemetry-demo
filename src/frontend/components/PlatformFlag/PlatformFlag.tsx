@@ -8,8 +8,12 @@ const { NEXT_PUBLIC_PLATFORM = 'local' } = typeof window !== 'undefined' ? windo
 const platform = NEXT_PUBLIC_PLATFORM;
 
 const PlatformFlag = () => {
+  // `platform` is read from window.ENV on the client but falls back to 'local'
+  // during SSR, so the two renders can differ per deployment. Suppress the
+  // hydration warning so this mismatch doesn't trigger React #418 and a full
+  // client re-render of the tree.
   return (
-    <S.Block>{platform}</S.Block>
+    <S.Block suppressHydrationWarning>{platform}</S.Block>
   );
 };
 
