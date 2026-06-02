@@ -1,12 +1,12 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { NextPage } from 'next';
+import { GetServerSideProps, NextPage } from 'next';
 import Head from 'next/head';
 import Image from 'next/image';
 import { useRouter } from 'next/router';
 import { useCallback, useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { dehydrate, DehydratedState, QueryClient, useQuery } from '@tanstack/react-query';
 import Ad from '../../../components/Ad';
 import Layout from '../../../components/Layout';
 import ProductPrice from '../../../components/ProductPrice';
@@ -25,7 +25,20 @@ import ProductAIAssistantProvider from '../../../providers/ProductAIAssistant.pr
 
 const quantityOptions = new Array(10).fill(0).map((_, i) => i + 1);
 
-const ProductDetail: NextPage = () => {
+// The selected currency lives in a client cookie/context that isn't available
+// during SSR, so the server renders in the default currency. The client only
+// re-fetches if the visitor has actually picked a different one.
+const DEFAULT_CURRENCY = 'USD';
+
+interface IProps {
+  product: Product;
+}
+
+type IServerProps = IProps & {
+  dehydratedState: DehydratedState;
+};
+
+const ProductDetail: NextPage<IProps> = ({ product: ssrProduct }) => {
   const { push, query } = useRouter();
   const [quantity, setQuantity] = useState(1);
   const {
@@ -46,11 +59,18 @@ const ProductDetail: NextPage = () => {
       description,
       priceUsd = { units: 0, currencyCode: 'USD', nanos: 0 },
       categories,
-    } = {} as Product,
+    } = (ssrProduct ?? {}) as Product,
   } = useQuery({
       queryKey: ['product', productId, 'selectedCurrency', selectedCurrency],
       queryFn: () => ApiGateway.getProduct(productId, selectedCurrency),
       enabled: !!productId,
+      // Seed the first server + client render with the product fetched in
+      // getServerSideProps so the details are in the initial HTML and survive
+      // hydration instead of relying on a client fetch (which the tracing-path
+      // error could break, leaving the page blank). staleTime avoids an
+      // immediate refetch on mount.
+      initialData: ssrProduct,
+      staleTime: 60 * 1000,
     }
   ) as { data: Product };
 
@@ -115,6 +135,45 @@ const ProductDetail: NextPage = () => {
       </Layout>
     </AdProvider>
   );
+};
+
+export const getServerSideProps: GetServerSideProps<IServerProps> = async ({ params }) => {
+  const productId = (params?.productId as string) ?? '';
+
+  // Server-only gRPC gateways; lazily imported so they never reach the browser
+  // bundle. Reusing the same services the BFF /api routes use guarantees the SSR
+  // payload has the exact shape the client expects, keeping hydration clean.
+  const { default: ProductCatalogService } = await import('../../../services/ProductCatalog.service');
+  const { default: ProductReviewService } = await import('../../../services/ProductReview.service');
+
+  const product = await ProductCatalogService.getProduct(productId, DEFAULT_CURRENCY);
+
+  // Prefetch the product, its reviews and average score into a per-request
+  // QueryClient and ship the dehydrated cache. _app.tsx's <HydrationBoundary>
+  // seeds these exact query keys, so both the product details and the reviews
+  // panel render in the initial HTML instead of via client-side fetches — which
+  // is what previously left them blank. Reviews are best-effort so a hiccup in
+  // that backend can't blank the whole product page.
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(['product', productId, 'selectedCurrency', DEFAULT_CURRENCY], product);
+
+  try {
+    const [reviews, averageScore] = await Promise.all([
+      ProductReviewService.getProductReviews(productId),
+      ProductReviewService.getAverageProductReviewScore(productId),
+    ]);
+    queryClient.setQueryData(['productReviews', productId], reviews);
+    queryClient.setQueryData(['productReviewAvgScore', productId], averageScore);
+  } catch {
+    // Leave reviews to the client; the product itself still renders server-side.
+  }
+
+  return {
+    props: {
+      product,
+      dehydratedState: dehydrate(queryClient),
+    },
+  };
 };
 
 export default ProductDetail;

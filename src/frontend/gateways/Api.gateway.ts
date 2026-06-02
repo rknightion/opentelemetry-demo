@@ -124,9 +124,14 @@ const ApiGateway = new Proxy(Apis(), {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return function (...args: any[]) {
       const baggage = propagation.getActiveBaggage() || propagation.createBaggage();
-      const newBaggage = baggage
-        .setEntry(AttributeNames.SESSION_ID, { value: userId })
-        .setEntry(AttributeNames.ENDUSER_ID, { value: userId });
+      // Only attach session/enduser baggage when we actually have an id; setting
+      // entries to `undefined` produces a malformed baggage entry that the W3C
+      // propagator chokes on when injecting headers into outbound requests.
+      const newBaggage = userId
+        ? baggage
+            .setEntry(AttributeNames.SESSION_ID, { value: userId })
+            .setEntry(AttributeNames.ENDUSER_ID, { value: userId })
+        : baggage;
       const newContext = propagation.setBaggage(context.active(), newBaggage);
       return context.with(newContext, () => {
         return Reflect.apply(originalFunction, undefined, args);

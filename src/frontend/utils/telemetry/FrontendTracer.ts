@@ -138,6 +138,14 @@ const FrontendTracer = async () => {
     },
     // Leave the Faro instance reachable on `window.faro` for ad-hoc debugging.
     preventGlobalExposure: false,
+    // Don't let Faro's fetch/XHR tracing instrument the telemetry exporters'
+    // own requests (the OTLP collector + Faro collector). Self-instrumenting
+    // those POSTs created a span-export feedback loop in the tracing path that
+    // threw "Cannot read properties of undefined (reading 'value')" and broke
+    // client-side data fetches. Faro applies this SDK-level ignore list to its
+    // OTel fetch/XHR instrumentation (it already auto-ignores its own collector;
+    // this adds the OTLP endpoint we wired up via the custom span processor).
+    ignoreUrls: [/\/otlp-http\//, /grafana\.net/],
     // Suppress noise that is never actionable.
     ignoreErrors: [
       /^ResizeObserver loop limit exceeded$/,

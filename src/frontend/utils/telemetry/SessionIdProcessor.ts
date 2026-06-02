@@ -15,6 +15,10 @@ export class SessionIdProcessor implements SpanProcessor {
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     onStart(span: Span, parentContext: Context): void {
+        // Guard against an undefined session id (e.g. before the session cookie
+        // is established): feeding undefined to setAttribute/baggage produces a
+        // malformed entry the propagators choke on.
+        if (!userId) return;
         span.setAttribute(AttributeNames.SESSION_ID, userId);
         span.setAttribute(AttributeNames.ENDUSER_ID, userId);
     }
