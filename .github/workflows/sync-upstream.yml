@@ -7,8 +7,8 @@ name: Sync from upstream
 
 on:
   schedule:
-    # Mondays at 06:00 UTC — quiet window, fresh PR for the week.
-    - cron: '0 6 * * 1'
+    # Daily at 06:00 UTC — quiet window, fresh PR each day.
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       upstream_ref:
