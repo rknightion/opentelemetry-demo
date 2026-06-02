@@ -5,7 +5,7 @@ import { CypressFields } from '../../utils/enums/CypressFields';
 import { Product } from '../../protos/demo';
 import ProductPrice from '../ProductPrice';
 import * as S from './ProductCard.styled';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNumberFlagValue } from '@openfeature/react-sdk';
 
 interface IProps {
@@ -30,6 +30,19 @@ const ProductCard = ({
   },
 }: IProps) => {
   const imageSlowLoad = useNumberFlagValue('imageSlowLoad', 0);
+  // Keep the latest flag value in a ref so the image-fetch effect can read it
+  // WITHOUT depending on it. Depending on `imageSlowLoad` made the effect re-run
+  // every time the flagd-web provider streamed a ConfigurationChanged event (or
+  // the OpenFeature context changed) — and its cleanup `controller.abort()` +
+  // `URL.revokeObjectURL()` then cancelled the in-flight image fetch and revoked
+  // the blob URL backing the (CSS background) image, blanking product images
+  // intermittently with no retry. Reading via a ref keeps the slow-load demo
+  // working (the fault-delay header still uses the current value) while making
+  // image loading immune to flag/provider re-renders.
+  const imageSlowLoadRef = useRef(imageSlowLoad);
+  useEffect(() => {
+    imageSlowLoadRef.current = imageSlowLoad;
+  }, [imageSlowLoad]);
   const [imageSrc, setImageSrc] = useState<string>('');
 
   useEffect(() => {
@@ -41,7 +54,7 @@ const ProductCard = ({
     let objectUrl: string | null = null;
     let cancelled = false;
     const headers = new Headers();
-    headers.append('x-envoy-fault-delay-request', imageSlowLoad.toString());
+    headers.append('x-envoy-fault-delay-request', imageSlowLoadRef.current.toString());
     headers.append('Cache-Control', 'no-cache');
     const requestInit = {
       method: 'GET',
@@ -66,7 +79,7 @@ const ProductCard = ({
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [imageSlowLoad, picture]);
+  }, [picture]);
 
   return (
     <S.Link href={`/product/${id}`}>
