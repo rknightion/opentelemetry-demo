@@ -169,7 +169,7 @@ const FrontendTracer = async () => {
       // the demo's OpenTelemetry Collector.
       new TracingInstrumentation({
         resourceAttributes: {
-          'app.synthetic_request': IS_SYNTHETIC_REQUEST,
+          'demo.synthetic_request': IS_SYNTHETIC_REQUEST,
         },
         contextManager: new ZoneContextManager(),
         spanProcessor: buildSpanProcessor({
@@ -181,12 +181,12 @@ const FrontendTracer = async () => {
           propagateTraceHeaderCorsUrls: [/.*/],
           fetchInstrumentationOptions: {
             applyCustomAttributesOnSpan: span => {
-              span.setAttribute('app.synthetic_request', IS_SYNTHETIC_REQUEST);
+              span.setAttribute('demo.synthetic_request', IS_SYNTHETIC_REQUEST);
             },
           },
           xhrInstrumentationOptions: {
             applyCustomAttributesOnSpan: span => {
-              span.setAttribute('app.synthetic_request', IS_SYNTHETIC_REQUEST);
+              span.setAttribute('demo.synthetic_request', IS_SYNTHETIC_REQUEST);
             },
           },
         },
