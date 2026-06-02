@@ -218,8 +218,30 @@ const buildSpanProcessor = ({
   //    (with cart, checkout, etc.) keeps working.
   const sessionIdProcessor = new SessionIdProcessor();
 
+  // CAUTION — initialization ordering: buildSpanProcessor() is evaluated while the
+  // `initializeFaro({...})` argument object is still being constructed, i.e. BEFORE
+  // `initializeFaro` has populated the global `faro` singleton. Reading `faro.api` /
+  // `faro.metas` directly here captures the pre-init values — a no-op API (so
+  // FaroTraceExporter silently drops every span) and `undefined` metas (so
+  // FaroMetaAttributesSpanProcessor throws "Cannot read properties of undefined
+  // (reading 'value')" on the first span and kills ALL browser tracing). These
+  // Proxies defer the lookup to call time (export()/onStart() run long after Faro
+  // is initialized) and bind functions to the live target so `this` stays correct.
+  const lazyFaroApi = new Proxy({} as typeof faro.api, {
+    get(_target, prop) {
+      const value = (faro.api as unknown as Record<string | symbol, unknown>)[prop];
+      return typeof value === 'function' ? value.bind(faro.api) : value;
+    },
+  });
+  const lazyFaroMetas = new Proxy({} as typeof faro.metas, {
+    get(_target, prop) {
+      const value = (faro.metas as unknown as Record<string | symbol, unknown>)[prop];
+      return typeof value === 'function' ? value.bind(faro.metas) : value;
+    },
+  });
+
   const faroBatchProcessor = new BatchSpanProcessor(
-    new FaroTraceExporter({ api: faro.api }),
+    new FaroTraceExporter({ api: lazyFaroApi }),
     {
       scheduledDelayMillis: TracingInstrumentation.SCHEDULED_BATCH_DELAY_MS,
       maxExportBatchSize: 30,
@@ -239,7 +261,7 @@ const buildSpanProcessor = ({
 
   return new FaroMetaAttributesSpanProcessor(
     new CompositeSpanProcessor(processors),
-    faro.metas
+    lazyFaroMetas
   );
 };
 

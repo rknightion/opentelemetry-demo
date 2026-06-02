@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,12 +25,19 @@ import (
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
-	"go.opentelemetry.io/contrib/otelconf"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 	"go.opentelemetry.io/otel/trace"
 
@@ -53,13 +61,80 @@ type productCatalog struct {
 }
 
 var (
-	logger *slog.Logger
-	db     *sql.DB
-	reg    metric.Registration
+	logger            *slog.Logger
+	db                *sql.DB
+	reg               metric.Registration
+	resource          *sdkresource.Resource
+	initResourcesOnce sync.Once
 )
 
 func init() {
 	logger = otelslog.NewLogger("product-catalog")
+}
+
+func initResource() *sdkresource.Resource {
+	initResourcesOnce.Do(func() {
+		extraResources, _ := sdkresource.New(
+			context.Background(),
+			sdkresource.WithOS(),
+			sdkresource.WithProcess(),
+			sdkresource.WithContainer(),
+			sdkresource.WithHost(),
+		)
+		resource, _ = sdkresource.Merge(
+			sdkresource.Default(),
+			extraResources,
+		)
+	})
+	return resource
+}
+
+func initTracerProvider() *sdktrace.TracerProvider {
+	ctx := context.Background()
+
+	exporter, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		logger.Error(fmt.Sprintf("new otlp trace grpc exporter failed: %v", err))
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(initResource()),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	return tp
+}
+
+func initMeterProvider() *sdkmetric.MeterProvider {
+	ctx := context.Background()
+
+	exporter, err := otlpmetricgrpc.New(ctx)
+	if err != nil {
+		logger.Error(fmt.Sprintf("new otlp metric grpc exporter failed: %v", err))
+	}
+
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter)),
+		sdkmetric.WithResource(initResource()),
+	)
+	otel.SetMeterProvider(mp)
+	return mp
+}
+
+func initLoggerProvider() *sdklog.LoggerProvider {
+	ctx := context.Background()
+
+	logExporter, err := otlploggrpc.New(ctx)
+	if err != nil {
+		return nil
+	}
+
+	loggerProvider := sdklog.NewLoggerProvider(
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+	)
+	global.SetLoggerProvider(loggerProvider)
+
+	return loggerProvider
 }
 
 func initDatabase() error {
@@ -98,26 +173,32 @@ func initDatabase() error {
 }
 
 func main() {
-	ctx := context.Background()
-
-	// Initialize OpenTelemetry SDK with otelconf
-	sdk, err := otelconf.NewSDK(otelconf.WithContext(ctx))
-	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to initialize OpenTelemetry SDK: %v", err))
-		os.Exit(1)
-	}
+	tp := initTracerProvider()
 	defer func() {
-		if err := sdk.Shutdown(ctx); err != nil {
-			logger.Error(fmt.Sprintf("Error shutting down OpenTelemetry SDK: %v", err))
+		if err := tp.Shutdown(context.Background()); err != nil {
+			logger.Error(fmt.Sprintf("Error shutting down tracer provider: %v", err))
 		}
-		logger.Info("Shutdown OpenTelemetry SDK")
 	}()
 
-	// Set global providers and propagator
-	otel.SetTracerProvider(sdk.TracerProvider())
-	otel.SetMeterProvider(sdk.MeterProvider())
-	global.SetLoggerProvider(sdk.LoggerProvider())
-	otel.SetTextMapPropagator(sdk.Propagator())
+	mp := initMeterProvider()
+	defer func() {
+		if err := mp.Shutdown(context.Background()); err != nil {
+			logger.Error(fmt.Sprintf("Error shutting down meter provider: %v", err))
+		}
+	}()
+
+	lp := initLoggerProvider()
+	defer func() {
+		if lp != nil {
+			if err := lp.Shutdown(context.Background()); err != nil {
+				logger.Error(fmt.Sprintf("Error shutting down logger provider: %v", err))
+			}
+		}
+	}()
+
+	// Rebind the package logger now that the OTLP logger provider is live so
+	// product-catalog logs are exported and correlate with its traces.
+	logger = otelslog.NewLogger("product-catalog")
 
 	// Initialize database connection
 	if err := initDatabase(); err != nil {
