@@ -150,6 +150,11 @@ func initDatabase() error {
 	var err error
 	db, err = otelsql.Open("postgres", connStr,
 		dbAttrs,
+		// Inject the W3C traceparent as a /* ... */ SQL comment (sqlcommenter) so
+		// Grafana Database Observability can correlate a query sample back to its
+		// trace. Requires the Alloy database_observability.postgres querySamples
+		// disableQueryRedaction=true so the raw (commented) query text is kept.
+		otelsql.WithSQLCommenter(true),
 		otelsql.WithSpanOptions(otelsql.SpanOptions{
 			OmitConnResetSession: true,
 			OmitRows:             true,
