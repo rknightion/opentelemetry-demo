@@ -279,6 +279,16 @@ services:
       - OTEL_COLLECTOR_HOST
       - FLAGD_HOST
       - FLAGD_PORT
+      # Grafana Faro Frontend Observability (all optional; empty FARO_URL
+      # means the frontend skips Faro init and only OTel tracing remains).
+      - FARO_URL
+      - FARO_APP_NAME
+      - FARO_APP_NAMESPACE
+      - FARO_APP_VERSION
+      - FARO_APP_ENVIRONMENT
+      - FARO_SESSION_TRACKING_ENABLED
+      - FARO_SESSION_PERSISTENT
+      - FARO_SESSION_SAMPLE_RATE
     healthcheck:
       test: ["CMD", "/nodejs/bin/node", "-e", "require('net').connect(${FRONTEND_PORT},require('os').hostname(),function(){process.exit(0)}).on('error',function(){process.exit(1)})"]
       start_period: 60s

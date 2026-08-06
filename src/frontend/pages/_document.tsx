@@ -7,6 +7,19 @@ import {context, propagation} from "@opentelemetry/api";
 
 const { ENV_PLATFORM, WEB_OTEL_SERVICE_NAME, PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_COLLECTOR_HOST} = process.env;
 
+// Grafana Faro is configured at runtime rather than build time so one image can
+// be pointed at any Frontend Observability app. An empty FARO_URL disables Faro.
+const {
+  FARO_URL = '',
+  FARO_APP_NAME = '',
+  FARO_APP_NAMESPACE = '',
+  FARO_APP_VERSION = '',
+  FARO_APP_ENVIRONMENT = '',
+  FARO_SESSION_TRACKING_ENABLED = '',
+  FARO_SESSION_PERSISTENT = '',
+  FARO_SESSION_SAMPLE_RATE = '',
+} = process.env;
+
 export default class MyDocument extends Document<{ envString: string }> {
   static async getInitialProps(ctx: DocumentContext) {
     const sheet = new ServerStyleSheet();
@@ -32,6 +45,14 @@ export default class MyDocument extends Document<{ envString: string }> {
           NEXT_PUBLIC_OTEL_SERVICE_NAME: '${WEB_OTEL_SERVICE_NAME}',
           NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: '${otlpTracesEndpoint}',
           IS_SYNTHETIC_REQUEST: '${isSyntheticRequest}',
+          NEXT_PUBLIC_FARO_URL: '${FARO_URL}',
+          NEXT_PUBLIC_FARO_APP_NAME: '${FARO_APP_NAME}',
+          NEXT_PUBLIC_FARO_APP_NAMESPACE: '${FARO_APP_NAMESPACE}',
+          NEXT_PUBLIC_FARO_APP_VERSION: '${FARO_APP_VERSION}',
+          NEXT_PUBLIC_FARO_APP_ENVIRONMENT: '${FARO_APP_ENVIRONMENT}',
+          NEXT_PUBLIC_FARO_SESSION_TRACKING_ENABLED: '${FARO_SESSION_TRACKING_ENABLED}',
+          NEXT_PUBLIC_FARO_SESSION_PERSISTENT: '${FARO_SESSION_PERSISTENT}',
+          NEXT_PUBLIC_FARO_SESSION_SAMPLE_RATE: '${FARO_SESSION_SAMPLE_RATE}',
         };`;
       return {
         ...initialProps,

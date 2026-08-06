@@ -9,6 +9,7 @@ import CartProvider from '../providers/Cart.provider';
 import { ThemeProvider } from 'styled-components';
 import Theme from '../styles/Theme';
 import FrontendTracer from '../utils/telemetry/FrontendTracer';
+import FaroInit from '../utils/telemetry/FaroInit';
 import SessionGateway from '../gateways/Session.gateway';
 import { OpenFeatureProvider, OpenFeature } from '@openfeature/react-sdk';
 import { FlagdWebProvider } from '@openfeature/flagd-web-provider';
@@ -20,11 +21,23 @@ declare global {
       NEXT_PUBLIC_OTEL_SERVICE_NAME?: string;
       NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?: string;
       IS_SYNTHETIC_REQUEST?: string;
+      NEXT_PUBLIC_FARO_URL?: string;
+      NEXT_PUBLIC_FARO_APP_NAME?: string;
+      NEXT_PUBLIC_FARO_APP_NAMESPACE?: string;
+      NEXT_PUBLIC_FARO_APP_VERSION?: string;
+      NEXT_PUBLIC_FARO_APP_ENVIRONMENT?: string;
+      NEXT_PUBLIC_FARO_SESSION_TRACKING_ENABLED?: string;
+      NEXT_PUBLIC_FARO_SESSION_PERSISTENT?: string;
+      NEXT_PUBLIC_FARO_SESSION_SAMPLE_RATE?: string;
     };
   }
 }
 
 if (typeof window !== 'undefined') {
+  // Faro first so its error and unhandled-rejection handlers are installed
+  // before anything else can throw. It does not register an OTel tracer
+  // provider, so it cannot race FrontendTracer for the global one.
+  FaroInit();
   FrontendTracer();
   if (window.location) {
     const session = SessionGateway.getSession();
