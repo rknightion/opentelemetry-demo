@@ -1,0 +1,33 @@
+# Weekly GHCR retention. Keeps every stable release forever, the newest 10 RCs,
+# and 7 days of main-<sha> edge images; sweeps orphaned cosign signatures and
+# stale buildcache layers.
+#
+# This repo is a FORK of open-telemetry/opentelemetry-demo and this file does not
+# exist upstream, so `sync-upstream.yml` must not delete it. Its package had 275
+# unpruned versions; every other package in the account is covered, so it is here
+# deliberately rather than by oversight.
+name: ghcr-cleanup
+
+on:
+  schedule:
+    - cron: "31 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Report what would be deleted without deleting it."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  prune:
+    permissions:
+      contents: read
+      packages: write # delete package versions
+    uses: rknightion/.github/.github/workflows/ghcr-cleanup.yml@30d43409fab7266a749ccf1a1c72ebcf79242d2c # v1.9.11
+    with:
+      packages: "opentelemetry-demo"
+      # Scheduled runs prune for real; a manual dispatch defaults to dry-run.
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
